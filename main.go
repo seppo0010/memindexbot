@@ -2,12 +2,20 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"image/jpeg"
+	"io"
+	"io/ioutil"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/jpoz/gomeme"
 	tb "gopkg.in/tucnak/telebot.v2"
 )
 
@@ -43,7 +51,38 @@ func addItem(m *tb.Message, fromDict *sync.Map, toDict map[string][]string, path
 	return true, nil
 }
 
+func caption(f io.Reader, top, bottom string) (io.Reader, error) {
+	j, err := jpeg.Decode(f)
+	if err != nil {
+		return nil, err
+	}
+	config := gomeme.NewConfig()
+	config.TopText = top
+	config.BottomText = bottom
+	meme := &gomeme.Meme{
+		Config:   config,
+		Memeable: gomeme.JPEG{j},
+	}
+	r, w := io.Pipe()
+	go func() { meme.Write(w); w.Close() }()
+	return r, nil
+}
+
 func main() {
+	http_port_s := os.Getenv("MEMINDEX_HTTP_PORT")
+	http_port, err := strconv.Atoi(http_port_s)
+	if err != nil {
+		log.Fatal("MEMINDEX_HTTP_PORT is invalid")
+	}
+	baseURL := os.Getenv("MEMINDEX_BASE_URL")
+	if baseURL == "" {
+		log.Fatal("MEMINDEX_BASE_URL is required")
+	}
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil {
+		log.Fatalf("Invalid URL %s: %s", baseURL, err)
+	}
+
 	b, err := tb.NewBot(tb.Settings{
 		Token:  os.Getenv("MEMINDEX_TELEGRAM_TOKEN"),
 		Poller: &tb.LongPoller{Timeout: 2 * time.Second},
@@ -53,6 +92,52 @@ func main() {
 		log.Fatal(err)
 		return
 	}
+
+	go func() {
+		basePathSegments := strings.Split(strings.TrimRight(parsedURL.Path, "/"), "/")
+		baselen := len(basePathSegments)
+		http.HandleFunc(parsedURL.Path, func(w http.ResponseWriter, r *http.Request) {
+			segments := strings.Split(r.URL.Path, "/")
+			if len(segments) < baselen+3 {
+				w.WriteHeader(400)
+				return
+			}
+			fileID := segments[baselen]
+			top := segments[baselen+1]
+			bottom := segments[baselen+2]
+
+			file, err := b.FileByID(fileID)
+			if err != nil {
+				log.Print(err)
+				w.WriteHeader(500)
+				return
+			}
+			reader, err := b.GetFile(&file)
+			if err != nil {
+				log.Print(err)
+				w.WriteHeader(500)
+				return
+			}
+			defer reader.Close()
+			img, err := caption(reader, top, bottom)
+			if err != nil {
+				log.Print(err)
+				w.WriteHeader(500)
+				return
+			}
+			b, err := ioutil.ReadAll(img)
+			if err != nil {
+				log.Print(err)
+				w.WriteHeader(500)
+				return
+			}
+
+			w.WriteHeader(200)
+			w.Write(b)
+		})
+
+		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", http_port), nil))
+	}()
 
 	f, err := os.Open(STICKER_JSON_PATH)
 	if err == nil {
@@ -96,9 +181,23 @@ func main() {
 	})
 
 	b.Handle(tb.OnQuery, func(q *tb.Query) {
+		criteria := q.Text
+		top, bottom := "", ""
+		if strings.Contains(criteria, ",") {
+			segments := strings.Split(criteria, ",")
+			criteria = segments[0]
+			if len(segments) > 2 {
+				top = segments[1]
+				bottom = segments[2]
+			} else {
+				bottom = segments[1]
+			}
+		}
+		hasCaption := top != "" || bottom != ""
+
 		stickers := map[string]bool{}
 		for word, fileIDs := range stickerDict {
-			if strings.HasPrefix(word, strings.ToLower(q.Text)) {
+			if strings.HasPrefix(word, strings.ToLower(criteria)) {
 				for _, fileID := range fileIDs {
 					stickers[fileID] = true
 				}
@@ -107,14 +206,21 @@ func main() {
 
 		photos := map[string]bool{}
 		for word, fileIDs := range photoDict {
-			if strings.HasPrefix(word, strings.ToLower(q.Text)) {
+			if strings.HasPrefix(word, strings.ToLower(criteria)) {
 				for _, fileID := range fileIDs {
 					photos[fileID] = true
 				}
 			}
 		}
 
-		results := make(tb.Results, 0, len(stickers)+len(photos))
+		results := make(tb.Results, 0, len(stickers)+len(photos)+len(photos)*map[bool]int{false: 0, true: 1}[hasCaption])
+		if hasCaption {
+			for fileID, _ := range photos {
+				res := &tb.PhotoResult{URL: fmt.Sprintf("%s/%s/%s/%s", strings.TrimRight(baseURL, "/"), fileID, url.PathEscape(top), url.PathEscape(bottom))}
+				res.SetResultID(fileID + ",captioned")
+				results = append(results, res)
+			}
+		}
 		for fileID, _ := range stickers {
 			res := &tb.StickerResult{Cache: fileID}
 			res.SetResultID(fileID)
