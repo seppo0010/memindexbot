@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"os"
 	"strings"
@@ -11,6 +12,8 @@ import (
 
 var dict map[string][]string = map[string][]string{}
 
+const JSON_PATH = "data.json"
+
 func main() {
 	b, err := tb.NewBot(tb.Settings{
 		Token:  os.Getenv("MEMINDEX_TELEGRAM_TOKEN"),
@@ -20,6 +23,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 		return
+	}
+
+	f, err := os.Open(JSON_PATH)
+	if err == nil {
+		json.NewDecoder(f).Decode(&dict)
 	}
 
 	addingStickers := map[int64]string{}
@@ -39,6 +47,12 @@ func main() {
 			}
 			delete(addingStickers, m.Chat.ID)
 			b.Send(m.Sender, "ok, cool")
+
+			f, err := os.Create(JSON_PATH)
+			if err != nil {
+				return
+			}
+			json.NewEncoder(f).Encode(dict)
 		}
 	})
 
