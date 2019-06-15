@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	tb "gopkg.in/tucnak/telebot.v2"
@@ -16,25 +17,30 @@ var photoDict map[string][]string = map[string][]string{}
 const STICKER_JSON_PATH = "stickers.json"
 const PHOTO_JSON_PATH = "photos.json"
 
-func addItem(m *tb.Message, fromDict map[int64]string, toDict map[string][]string, path string) (bool, error) {
-	if fileID, found := fromDict[m.Chat.ID]; found {
-		for _, word := range strings.Split(m.Text, ",") {
-			word = strings.ToLower(strings.TrimSpace(word))
-			if _, found = toDict[word]; !found {
-				toDict[word] = []string{}
-			}
-			toDict[word] = append(toDict[word], fileID)
-		}
-		delete(fromDict, m.Chat.ID)
-
-		f, err := os.Create(path)
-		if err != nil {
-			return false, err
-		}
-		json.NewEncoder(f).Encode(toDict)
-		return true, nil
+func addItem(m *tb.Message, fromDict *sync.Map, toDict map[string][]string, path string) (bool, error) {
+	fileIDif, found := fromDict.Load(m.Chat.ID)
+	if !found {
+		return false, nil
 	}
-	return false, nil
+	fileID, ok := fileIDif.(string)
+	if !ok {
+		return false, nil
+	}
+	fromDict.Delete(m.Chat.ID)
+	for _, word := range strings.Split(m.Text, ",") {
+		word = strings.ToLower(strings.TrimSpace(word))
+		if _, found = toDict[word]; !found {
+			toDict[word] = []string{}
+		}
+		toDict[word] = append(toDict[word], fileID)
+	}
+
+	f, err := os.Create(path)
+	if err != nil {
+		return false, err
+	}
+	json.NewEncoder(f).Encode(toDict)
+	return true, nil
 }
 
 func main() {
@@ -57,22 +63,21 @@ func main() {
 		json.NewDecoder(f).Decode(&photoDict)
 	}
 
-	addingStickers := map[int64]string{}
-	addingPhotos := map[int64]string{}
+	addingStickers := &sync.Map{}
+	addingPhotos := &sync.Map{}
 	b.Handle(tb.OnSticker, func(m *tb.Message) {
 		b.Send(m.Sender, "cool sticker, bro... send me some keywords (separated by commas)")
-		addingStickers[m.Chat.ID] = m.Sticker.File.FileID
+		addingStickers.Store(m.Chat.ID, m.Sticker.File.FileID)
 	})
 
 	b.Handle(tb.OnPhoto, func(m *tb.Message) {
 		b.Send(m.Sender, "cool photo, bro... send me some keywords (separated by commas)")
-		addingPhotos[m.Chat.ID] = m.Photo.File.FileID
-
+		addingPhotos.Store(m.Chat.ID, m.Photo.File.FileID)
 	})
 
 	b.Handle(tb.OnText, func(m *tb.Message) {
 		type fromTo struct {
-			from map[int64]string
+			from *sync.Map
 			to   map[string][]string
 			path string
 		}
