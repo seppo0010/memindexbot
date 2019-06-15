@@ -10,9 +10,32 @@ import (
 	tb "gopkg.in/tucnak/telebot.v2"
 )
 
-var dict map[string][]string = map[string][]string{}
+var stickerDict map[string][]string = map[string][]string{}
+var photoDict map[string][]string = map[string][]string{}
 
-const JSON_PATH = "data.json"
+const STICKER_JSON_PATH = "stickers.json"
+const PHOTO_JSON_PATH = "photos.json"
+
+func addItem(m *tb.Message, fromDict map[int64]string, toDict map[string][]string, path string) (bool, error) {
+	if fileID, found := fromDict[m.Chat.ID]; found {
+		for _, word := range strings.Split(m.Text, ",") {
+			word = strings.ToLower(strings.TrimSpace(word))
+			if _, found = toDict[word]; !found {
+				toDict[word] = []string{}
+			}
+			toDict[word] = append(toDict[word], fileID)
+		}
+		delete(fromDict, m.Chat.ID)
+
+		f, err := os.Create(path)
+		if err != nil {
+			return false, err
+		}
+		json.NewEncoder(f).Encode(toDict)
+		return true, nil
+	}
+	return false, nil
+}
 
 func main() {
 	b, err := tb.NewBot(tb.Settings{
@@ -25,50 +48,75 @@ func main() {
 		return
 	}
 
-	f, err := os.Open(JSON_PATH)
+	f, err := os.Open(STICKER_JSON_PATH)
 	if err == nil {
-		json.NewDecoder(f).Decode(&dict)
+		json.NewDecoder(f).Decode(&stickerDict)
+	}
+	f, err = os.Open(PHOTO_JSON_PATH)
+	if err == nil {
+		json.NewDecoder(f).Decode(&photoDict)
 	}
 
 	addingStickers := map[int64]string{}
+	addingPhotos := map[int64]string{}
 	b.Handle(tb.OnSticker, func(m *tb.Message) {
 		b.Send(m.Sender, "cool sticker, bro... send me some keywords (separated by commas)")
 		addingStickers[m.Chat.ID] = m.Sticker.File.FileID
 	})
 
-	b.Handle(tb.OnText, func(m *tb.Message) {
-		if fileID, found := addingStickers[m.Chat.ID]; found {
-			for _, word := range strings.Split(m.Text, ",") {
-				word = strings.ToLower(strings.TrimSpace(word))
-				if _, found = dict[word]; !found {
-					dict[word] = []string{}
-				}
-				dict[word] = append(dict[word], fileID)
-			}
-			delete(addingStickers, m.Chat.ID)
-			b.Send(m.Sender, "ok, cool")
+	b.Handle(tb.OnPhoto, func(m *tb.Message) {
+		b.Send(m.Sender, "cool photo, bro... send me some keywords (separated by commas)")
+		addingPhotos[m.Chat.ID] = m.Photo.File.FileID
 
-			f, err := os.Create(JSON_PATH)
+	})
+
+	b.Handle(tb.OnText, func(m *tb.Message) {
+		type fromTo struct {
+			from map[int64]string
+			to   map[string][]string
+			path string
+		}
+		for _, ft := range []fromTo{
+			fromTo{addingStickers, stickerDict, STICKER_JSON_PATH}, fromTo{addingPhotos, photoDict, PHOTO_JSON_PATH}} {
+			added, err := addItem(m, ft.from, ft.to, ft.path)
 			if err != nil {
+				log.Print(err)
 				return
 			}
-			json.NewEncoder(f).Encode(dict)
+			if added {
+				b.Send(m.Sender, "ok, cool")
+				return
+			}
 		}
 	})
 
 	b.Handle(tb.OnQuery, func(q *tb.Query) {
-		files := map[string]bool{}
-		for word, fileIDs := range dict {
+		stickers := map[string]bool{}
+		for word, fileIDs := range stickerDict {
 			if strings.HasPrefix(word, strings.ToLower(q.Text)) {
 				for _, fileID := range fileIDs {
-					files[fileID] = true
+					stickers[fileID] = true
 				}
 			}
 		}
 
-		results := make(tb.Results, 0, len(files))
-		for fileID, _ := range files {
+		photos := map[string]bool{}
+		for word, fileIDs := range photoDict {
+			if strings.HasPrefix(word, strings.ToLower(q.Text)) {
+				for _, fileID := range fileIDs {
+					photos[fileID] = true
+				}
+			}
+		}
+
+		results := make(tb.Results, 0, len(stickers)+len(photos))
+		for fileID, _ := range stickers {
 			res := &tb.StickerResult{Cache: fileID}
+			res.SetResultID(fileID)
+			results = append(results, res)
+		}
+		for fileID, _ := range photos {
+			res := &tb.PhotoResult{Cache: fileID}
 			res.SetResultID(fileID)
 			results = append(results, res)
 		}
