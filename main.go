@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha1"
 	"encoding/json"
 	"fmt"
 	"image/jpeg"
@@ -97,6 +98,7 @@ func main() {
 		basePathSegments := strings.Split(strings.TrimRight(parsedURL.Path, "/"), "/")
 		baselen := len(basePathSegments)
 		http.HandleFunc(parsedURL.Path, func(w http.ResponseWriter, r *http.Request) {
+			log.Print("received request %#v", r)
 			segments := strings.Split(r.URL.Path, "/")
 			if len(segments) < baselen+3 {
 				w.WriteHeader(400)
@@ -133,6 +135,7 @@ func main() {
 			}
 
 			w.WriteHeader(200)
+			w.Header().Set("Content-Type", "image/jpeg")
 			w.Write(b)
 		})
 
@@ -190,6 +193,7 @@ func main() {
 				top = segments[1]
 				bottom = segments[2]
 			} else {
+				top = " "
 				bottom = segments[1]
 			}
 		}
@@ -216,22 +220,33 @@ func main() {
 		results := make(tb.Results, 0, len(stickers)+len(photos)+len(photos)*map[bool]int{false: 0, true: 1}[hasCaption])
 		if hasCaption {
 			for fileID, _ := range photos {
-				res := &tb.PhotoResult{URL: fmt.Sprintf("%s/%s/%s/%s", strings.TrimRight(baseURL, "/"), fileID, url.PathEscape(top), url.PathEscape(bottom))}
-				res.SetResultID(fileID + ",captioned")
+				URL := fmt.Sprintf("%s/%s/%s/%s", strings.TrimRight(baseURL, "/"), fileID, url.PathEscape(top), url.PathEscape(bottom))
+				log.Print(URL)
+				res := &tb.PhotoResult{
+					URL:      URL,
+					ThumbURL: URL,
+				}
+				h := sha1.New()
+				io.WriteString(h, fileID)
+
+				res.SetResultID(fmt.Sprintf("%x", h.Sum(nil)))
+				log.Printf("%#v", res)
 				results = append(results, res)
 			}
 		}
-		for fileID, _ := range stickers {
-			res := &tb.StickerResult{Cache: fileID}
-			res.SetResultID(fileID)
-			results = append(results, res)
-		}
-		for fileID, _ := range photos {
-			res := &tb.PhotoResult{Cache: fileID}
-			res.SetResultID(fileID)
-			results = append(results, res)
-		}
-
+		/*
+			for fileID, _ := range stickers {
+				res := &tb.StickerResult{Cache: fileID}
+				res.SetResultID(fileID)
+				results = append(results, res)
+			}
+			for fileID, _ := range photos {
+				res := &tb.PhotoResult{Cache: fileID}
+				res.SetResultID(fileID)
+				results = append(results, res)
+			}
+		*/
+		log.Printf("%#v", results)
 		err := b.Answer(q, &tb.QueryResponse{
 			Results:   results,
 			CacheTime: 10,
