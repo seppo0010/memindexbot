@@ -15,6 +15,7 @@ var stickerDict map[string][]string = map[string][]string{}
 var photoDict map[string][]string = map[string][]string{}
 var gifDict map[string][]string = map[string][]string{}
 
+const MAX_RESULTS = 10
 const STICKER_JSON_PATH = "stickers.json"
 const PHOTO_JSON_PATH = "photos.json"
 const GIF_JSON_PATH = "gif.json"
@@ -147,18 +148,27 @@ func main() {
 			}
 		}
 
-		results := make(tb.Results, 0, len(gifs)+len(stickers)+len(photos))
+		results := make(tb.Results, 0, MAX_RESULTS)
 		for fileID, _ := range gifs {
+			if len(results) > MAX_RESULTS {
+				break
+			}
 			res := &tb.Mpeg4GifResult{Cache: fileID}
 			res.SetResultID(fileID)
 			results = append(results, res)
 		}
 		for fileID, _ := range stickers {
+			if len(results) > MAX_RESULTS {
+				break
+			}
 			res := &tb.StickerResult{Cache: fileID}
 			res.SetResultID(fileID)
 			results = append(results, res)
 		}
 		for fileID, _ := range photos {
+			if len(results) > MAX_RESULTS {
+				break
+			}
 			res := &tb.PhotoResult{Cache: fileID}
 			res.SetResultID(fileID)
 			results = append(results, res)
