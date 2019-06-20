@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jpoz/gomeme"
 	tb "gopkg.in/tucnak/telebot.v2"
 )
@@ -104,7 +105,7 @@ func main() {
 				w.WriteHeader(400)
 				return
 			}
-			fileID := segments[baselen]
+			fileID := strings.Replace(segments[baselen], "+", "_", -1)
 			top := segments[baselen+1]
 			bottom := segments[baselen+2]
 
@@ -134,8 +135,9 @@ func main() {
 				return
 			}
 
-			w.WriteHeader(200)
+			w.Header().Set("Content-Length", strconv.Itoa(len(b)))
 			w.Header().Set("Content-Type", "image/jpeg")
+			w.WriteHeader(200)
 			w.Write(b)
 		})
 
@@ -220,8 +222,7 @@ func main() {
 		results := make(tb.Results, 0, len(stickers)+len(photos)+len(photos)*map[bool]int{false: 0, true: 1}[hasCaption])
 		if hasCaption {
 			for fileID, _ := range photos {
-				URL := fmt.Sprintf("%s/%s/%s/%s", strings.TrimRight(baseURL, "/"), fileID, url.PathEscape(top), url.PathEscape(bottom))
-				log.Print(URL)
+				URL := fmt.Sprintf("%s/%s/%s/%s.jpg", strings.TrimRight(baseURL, "/"), strings.Replace(fileID, "_", "+", -1), url.PathEscape(top), url.PathEscape(bottom))
 				res := &tb.PhotoResult{
 					URL:      URL,
 					ThumbURL: URL,
@@ -229,23 +230,23 @@ func main() {
 				h := sha1.New()
 				io.WriteString(h, fileID)
 
-				res.SetResultID(fmt.Sprintf("%x", h.Sum(nil)))
+				res.SetResultID(uuid.New().String())
 				log.Printf("%#v", res)
 				results = append(results, res)
 			}
 		}
-		/*
-			for fileID, _ := range stickers {
-				res := &tb.StickerResult{Cache: fileID}
-				res.SetResultID(fileID)
-				results = append(results, res)
-			}
-			for fileID, _ := range photos {
-				res := &tb.PhotoResult{Cache: fileID}
-				res.SetResultID(fileID)
-				results = append(results, res)
-			}
-		*/
+
+		for fileID, _ := range stickers {
+			res := &tb.StickerResult{Cache: fileID}
+			res.SetResultID(fileID)
+			results = append(results, res)
+		}
+		for fileID, _ := range photos {
+			res := &tb.PhotoResult{Cache: fileID}
+			res.SetResultID(fileID)
+			results = append(results, res)
+		}
+
 		log.Printf("%#v", results)
 		err := b.Answer(q, &tb.QueryResponse{
 			Results:   results,
